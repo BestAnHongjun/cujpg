@@ -1,3 +1,10 @@
+/*
+* Copyright © Coder.AN.  All rights reserved.
+*
+* an.hongjun@foxmail.com
+* https://github.com/BestAnHongjun
+* 2023-01-22
+*/
 #ifndef __TIMER_H__
 #define __TIMER_H__
 
@@ -61,7 +68,7 @@ void Timer::end()
 
 void Timer::output_timer_info()
 {
-    printf("[%s]total_time:%.4lf ms, cnt:%.0lf, avg_time:%.4lf ms\n", 
+    printf("[%s]total_time:%.4lf s, cnt:%.0lf, avg_time:%.4lf s\n", 
         this->timer_name.c_str(), this->total_time, this->times, this->total_time / this->times);
     return;
 }

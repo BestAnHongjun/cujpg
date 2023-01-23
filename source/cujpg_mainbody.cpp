@@ -7,57 +7,56 @@
 */
 #include "cujpg.h"
 #include "../cuda/cujpg_kernel.cuh"
+using namespace cujpg;
 
 #include <fstream>
 #include <iostream>
 
 
-cuJpgDecoder::cuJpgDecoder(const char* jpgFileName)
+cuJpgDecoder::cuJpgDecoder(memDevice dstDev)
 {
-    std::ifstream stream(jpgFileName, std::ifstream::binary);
-    if (!stream.good())
-    {
-        std::cerr << "Error! Can not open jpg file:" << jpgFileName << std::endl;
-        exit(-1);
-    }
+    this->dstDev = dstDev;
+    this->src_buffer = NULL;
+    this->dst_buffer = NULL;
+    this->tmp_buffer = NULL;
 
-    stream.seekg(0, std::ios::end);
-    this->nDataLength = (int64_t)stream.tellg();
-    stream.seekg(0, std::ios::beg);
-
-    this->pJpgData = new uint8_t[this->nDataLength];
-    stream.read((char*)this->pJpgData, this->nDataLength);
-
-    init();
-}
-
-cuJpgDecoder::cuJpgDecoder(const uint8_t* pJpgData, int64_t nDataLength)
-{
-    this->pJpgData = new uint8_t[nDataLength];
-    memcpy(this->pJpgData, pJpgData, nDataLength);
-    init();
+    memset(&oFrameHeader,0,sizeof(FrameHeader));
+    memset(aQuantizationTables,0, 4 * sizeof(QuantizationTable));
+    memset(aHuffmanTables,0, 4 * sizeof(HuffmanTable));
+    CHECK(cudaMalloc(&pdQuantizationTables, 64 * 4));
+    NPP_CHECK_NPP(nppiDCTInitAlloc(&pDCTState));
 }
 
 cuJpgDecoder::~cuJpgDecoder()
 {
-    delete[] this->pJpgData;
-    cudaFree(pdQuantizationTables);
-    if (this->resBuffer) delete[] this->resBuffer;
+    if (this->dstMallocTag)
+    {
+        if (this->dstDev == HOST) 
+        {
+            delete[] this->dst_buffer->start;
+            delete this->dst_buffer;
+        }
+        else 
+        {
+            CHECK(cudaFree(this->dst_buffer->start));
+            delete this->dst_buffer;
+        }
+    }
+
+    if (!this->tmp_buffer) delete[] this->tmp_buffer;
+    CHECK(cudaFree(pdQuantizationTables));
+    NPP_CHECK_NPP(nppiDCTFree(pDCTState));
 }
 
-void cuJpgDecoder::init()
+void cuJpgDecoder::setSrcBuffer(imgBuffer* src)
 {
-    memset(&oFrameHeader,0,sizeof(FrameHeader));
-    memset(aQuantizationTables,0, 4 * sizeof(QuantizationTable));
-    memset(aHuffmanTables,0, 4 * sizeof(HuffmanTable));
-    cudaMalloc(&pdQuantizationTables, 64 * 4);
-    NPP_CHECK_NPP(nppiDCTInitAlloc(&pDCTState));
+    this->src_buffer = src;
 }
 
 void cuJpgDecoder::decode(imgType type)
 {
     int nPos = 0;
-    uint8_t nMarker = nextMarker(this->pJpgData, nPos, this->nDataLength);
+    uint8_t nMarker = nextMarker(src_buffer->start, nPos, src_buffer->length);
 
     // Check if this is a valid JPEG buffer
     if (nMarker != 0x0d8u)
@@ -66,7 +65,7 @@ void cuJpgDecoder::decode(imgType type)
         exit(-1);
     }
 
-    nMarker = nextMarker(this->pJpgData, nPos, this->nDataLength);
+    nMarker = nextMarker(src_buffer->start, nPos, src_buffer->length);
 
     while (nMarker != -1)
     {
@@ -77,7 +76,7 @@ void cuJpgDecoder::decode(imgType type)
         
         if (nMarker == 0x0dbu)
         {   // DQT
-            readQuantizationTables(this->pJpgData + nPos, this->aQuantizationTables);
+            readQuantizationTables(src_buffer->start + nPos, aQuantizationTables);
         }
 
         if ((nMarker == 0x0c0u) | (nMarker == 0x0c2u))
@@ -88,7 +87,7 @@ void cuJpgDecoder::decode(imgType type)
                 exit(-1);
             }
 
-            readFrameHeader(this->pJpgData + nPos, this->oFrameHeader);
+            readFrameHeader(src_buffer->start + nPos, oFrameHeader);
             #if CUJPG_DEBUG_OUTPUT == 1
             std::cout << "Image Size: " << this->oFrameHeader.nWidth;
             std::cout << "x" << this->oFrameHeader.nHeight;
@@ -146,24 +145,24 @@ void cuJpgDecoder::decode(imgType type)
 
         if (nMarker == 0x0c4u)
         {   // Huffman Tables
-            readHuffmanTables(this->pJpgData + nPos, aHuffmanTables);
+            readHuffmanTables(src_buffer->start + nPos, aHuffmanTables);
         }
 
         if (nMarker == 0x0DA)
         {
             // Scan
-            readScanHeader(this->pJpgData + nPos, oScanHeader);
+            readScanHeader(src_buffer->start + nPos, oScanHeader);
             nPos += 6 + oScanHeader.nComponents * 2;
 
             int nAfterNextMarkerPos = nPos;
-            int nAfterScanMarker = nextMarker(this->pJpgData, nAfterNextMarkerPos, this->nDataLength);
+            int nAfterScanMarker = nextMarker(src_buffer->start, nAfterNextMarkerPos, src_buffer->length);
 
             if (nRestartInterval > 0)
             {
                 while (nAfterScanMarker >= 0x0D0 && nAfterScanMarker <= 0x0D7)
                 {
                     // This is a restart marker, go on
-                    nAfterScanMarker = nextMarker(this->pJpgData, nAfterNextMarkerPos, this->nDataLength);
+                    nAfterScanMarker = nextMarker(src_buffer->start, nAfterNextMarkerPos, src_buffer->length);
                 }
             }
 
@@ -176,7 +175,7 @@ void cuJpgDecoder::decode(imgType type)
                 nppiDecodeHuffmanSpecInitAllocHost_JPEG(pHuffmanACTables[(oScanHeader.aHuffmanTablesSelector[i] & 0x0f)].aCodes, nppiACTable, &apDecHuffmanACTable[i]);
             }
 
-            NPP_CHECK_NPP(nppiDecodeHuffmanScanHost_JPEG_8u16s_P3R(this->pJpgData + nPos, nAfterNextMarkerPos - nPos - 2,
+            NPP_CHECK_NPP(nppiDecodeHuffmanScanHost_JPEG_8u16s_P3R(src_buffer->start + nPos, nAfterNextMarkerPos - nPos - 2,
                                                                    nRestartInterval, oScanHeader.nSs, oScanHeader.nSe, 
                                                                    oScanHeader.nA >> 4, oScanHeader.nA & 0x0f,
                                                                    aphDCT, aDCTStep,
@@ -191,7 +190,7 @@ void cuJpgDecoder::decode(imgType type)
             }
         }
 
-        nMarker = nextMarker(this->pJpgData, nPos, this->nDataLength);
+        nMarker = nextMarker(src_buffer->start, nPos, src_buffer->length);
     }
 
     // Copy DCT coefficients and Quantization Tables from host to device 
@@ -243,21 +242,56 @@ void cuJpgDecoder::decode(imgType type)
     std::cout << "CbStep:" << aSrcImageStep[2] << std::endl;
     #endif
 
-    uint8_t* resBuffer_d;
-    pwidth = aSrcSize[0].width;
-    pheight = aSrcSize[0].height;
-    
     size_t mPitch;
-    size_t img_step = aSrcImageStep[0] * 3;
-    if (this->resBuffer) delete[] this->resBuffer;
-    this->resBuffer = new uint8_t[pheight * img_step];
-    NPP_CHECK_CUDA(cudaMallocPitch(&resBuffer_d, &mPitch, img_step, pheight));
+    imgBuffer* res_buffer_d = new imgBuffer;
+    int32_t pwidth = res_buffer_d->width = aSrcSize[0].width;
+    int32_t pheight = res_buffer_d->height = aSrcSize[0].height;
+    int32_t pdim = type == TYPE_GRAY ? 1 : 3;
+    res_buffer_d->length = pwidth * pheight * pdim;
+    NPP_CHECK_CUDA(cudaMallocPitch(&(res_buffer_d->start), &mPitch, pwidth * pdim, pheight));
 
-    YCrCb2BGR(apSrcImage[0], apSrcImage[1], apSrcImage[2],
+    int (*kernel_func)(uint8_t*, uint8_t*, uint8_t*, int, int, int, int, int, uint8_t*, int, int);
+    if (type == TYPE_RGB) kernel_func = YCrCb2RGB;
+    else if (type == TYPE_BGR) kernel_func = YCrCb2BGR;
+    else if (type == TYPE_GRAY) kernel_func = YCrCb2Gray;
+    else
+    {
+        std::cerr << "Unsupport image type! at" << __FILE__ << "," << __LINE__ << std::endl;
+        exit(-1);
+    }
+    kernel_func(apSrcImage[0], apSrcImage[1], apSrcImage[2],
         pwidth, pheight, aSrcImageStep[0], aSrcImageStep[1], aSrcImageStep[2],
-        resBuffer_d, nMCUBlocksV, nMCUBlocksH);
+        res_buffer_d->start, nMCUBlocksV, nMCUBlocksH);
 
-    NPP_CHECK_CUDA(cudaMemcpy(resBuffer, resBuffer_d, pheight * img_step, cudaMemcpyDeviceToHost));
+    if (dstDev == HOST)
+    {
+        if (dstMallocTag) 
+        {
+            delete[] dst_buffer->start;
+            delete dst_buffer;
+        }
+        dstMallocTag = true;
+        dst_buffer = new imgBuffer;
+        dst_buffer->start = new uint8_t[pwidth * pheight * pdim];
+        dst_buffer->width = pwidth;
+        dst_buffer->height = pheight;
+        dst_buffer->length = pwidth * pheight * pdim;
+        NPP_CHECK_CUDA(cudaMemcpy(dst_buffer->start, res_buffer_d->start, pwidth * pheight * pdim, cudaMemcpyDeviceToHost));
+        CHECK(cudaFree(res_buffer_d));
+    }
+    else
+    {
+        if (dstMallocTag)
+        {
+            CHECK(cudaFree(dst_buffer->start));
+            delete dst_buffer;
+        }
+        dstMallocTag = true;
+        dst_buffer = res_buffer_d;
+        dst_buffer->width = pwidth;
+        dst_buffer->height = pheight;
+        dst_buffer->length = pwidth * pheight * pdim;
+    }
 
     for (int i = 0; i < 3; ++i)
     {
@@ -265,16 +299,40 @@ void cuJpgDecoder::decode(imgType type)
         cudaFreeHost(aphDCT[i]);
         cudaFree(apSrcImage[i]);
     }
-    cudaFree(resBuffer_d);
 }
 
-uint8_t* getBufferResult()
+imgBuffer* cuJpgDecoder::getBufferResult()
 {
-
+    if (dst_buffer == NULL)
+    {
+        std::cerr << "You have not decode any JPEG! At" << __FILE__ << "," << __LINE__ << std::endl;
+        exit(-1);
+    }
+    return dst_buffer;
 }
 
 cv::Mat cuJpgDecoder::getMatResult()
 {
-    cv::Mat res = cv::Mat(pheight, pwidth, CV_8UC3, (void*)this->resBuffer, aSrcImageStep[0] * 3);
+    if (dst_buffer == NULL)
+    {
+        std::cerr << "You have not decode any JPEG! At" << __FILE__ << "," << __LINE__ << std::endl;
+        exit(-1);
+    }
+    cv::Mat res;
+    int32_t pwidth = dst_buffer->width;
+    int32_t pheight = dst_buffer->height;
+    int32_t pdim = (dst_buffer->length) / (pwidth * pheight);
+    int32_t type = pdim == 1 ? CV_8UC1 : CV_8UC3;
+    if (dstDev == GPU)
+    {
+        if (tmp_buffer != NULL) delete[] tmp_buffer; 
+        tmp_buffer = new uint8_t[dst_buffer->length];
+        NPP_CHECK_CUDA(cudaMemcpy(tmp_buffer, dst_buffer->start, dst_buffer->length, cudaMemcpyDeviceToHost));
+        res = cv::Mat(pheight, pwidth, type, (void*)tmp_buffer, pwidth * pdim);
+    }
+    else
+    {
+        res = cv::Mat(pheight, pwidth, type, (void*)dst_buffer->start);
+    }
     return res;
 }

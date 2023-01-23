@@ -39,5 +39,7 @@ target_link_libraries(cujpg ${EXTRA_LIBS})
 target_link_libraries(cujpg ${OpenCV_LIBS})
 target_link_libraries(cujpg nppc nppial nppicc nppicom nppidei nppif nppig nppim nppist nppisu nppitc npps)
 
+find_package(JPEG REQUIRED)
+include_directories(${JPEG_INCLUDE_DIR})
 add_executable(demo demo.cpp)
-target_link_libraries(demo cujpg)
+target_link_libraries(demo cujpg ${JPEG_LIBRARIES})

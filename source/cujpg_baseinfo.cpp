@@ -6,6 +6,7 @@
 * 2023-01-22
 */
 #include "cujpg.h"
+using namespace cujpg;
 
 
 void cuJpgDecoder::readQuantizationTables(const unsigned char *pData, QuantizationTable *pTables)

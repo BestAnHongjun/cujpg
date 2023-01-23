@@ -21,6 +21,18 @@
 #include "helper_string.h"
 #include "helper_cuda.h"
 
+namespace cujpg
+{
+
+struct imgBuffer{
+    uint8_t* start = NULL;
+    uint32_t width;
+    uint32_t height;
+    uint64_t length;
+};
+
+typedef struct imgBuffer imgBuffer;
+
 
 struct FrameHeader
 {
@@ -74,28 +86,34 @@ enum imgType
     TYPE_GRAY    = 2
 };
 
+enum memDevice
+{
+    HOST    = 0,
+    GPU     = 1
+};
+
 
 class cuJpgDecoder
 {
 private:
-    uint8_t* pJpgData;
-    int64_t nDataLength;
-    uint8_t* resBuffer = NULL;
-    int pwidth, pheight;
+    imgBuffer* src_buffer;
+    imgBuffer* dst_buffer;
+    memDevice dstDev;
+    bool dstMallocTag = false;
 
 public:
-    cuJpgDecoder(const char* jpgFileName);
-    cuJpgDecoder(const uint8_t* pJpgData, int64_t nDataLength);
+    cuJpgDecoder(memDevice dstDev);
     ~cuJpgDecoder();
 
 public:
-    void init();
+    void setSrcBuffer(imgBuffer* src);
     void decode(imgType type);
-    uint8_t* getBufferResult();
+    imgBuffer* getBufferResult();
     cv::Mat getMatResult();
 
 
 private:
+    uint8_t* tmp_buffer;
     NppiSize aSrcActualSize[3];
 
     NppiSize aSrcSize[3];
@@ -127,5 +145,7 @@ private:
     static void readHuffmanTables(const unsigned char *pData, HuffmanTable *pTables);
     static void readScanHeader(const unsigned char *pData, ScanHeader &header);
 };
+
+} // namespace cujpg
 
 #endif // __CUJPG_H__
