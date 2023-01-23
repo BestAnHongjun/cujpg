@@ -9,6 +9,6 @@
 #define __CUJPG_CONFIG_H__
 
 
-#define CUJPG_DEBUG_OUTPUT    1
+#define CUJPG_DEBUG_OUTPUT    0
 
 #endif // __CUJPG_CONFIG_H__

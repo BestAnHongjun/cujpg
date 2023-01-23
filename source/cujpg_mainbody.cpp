@@ -249,8 +249,8 @@ void cuJpgDecoder::decode(imgType type)
     
     size_t mPitch;
     size_t img_step = aSrcImageStep[0] * 3;
-    if (!this->resBuffer)
-        this->resBuffer = new uint8_t[pheight * img_step];
+    if (this->resBuffer) delete[] this->resBuffer;
+    this->resBuffer = new uint8_t[pheight * img_step];
     NPP_CHECK_CUDA(cudaMallocPitch(&resBuffer_d, &mPitch, img_step, pheight));
 
     YCrCb2BGR(apSrcImage[0], apSrcImage[1], apSrcImage[2],
@@ -266,8 +266,6 @@ void cuJpgDecoder::decode(imgType type)
         cudaFree(apSrcImage[i]);
     }
     cudaFree(resBuffer_d);
-
-    cudaDeviceReset();
 }
 
 uint8_t* getBufferResult()
@@ -277,7 +275,6 @@ uint8_t* getBufferResult()
 
 cv::Mat cuJpgDecoder::getMatResult()
 {
-    cv::Mat res = cv::Mat(pheight, pwidth, CV_8UC3, (void*)this->resBuffer, 4096 * 3);
-    //cv::Mat res = cv::Mat(pheight, pwidth, CV_8UC1, (void*)this->resBuffer, 4096);
+    cv::Mat res = cv::Mat(pheight, pwidth, CV_8UC3, (void*)this->resBuffer, aSrcImageStep[0] * 3);
     return res;
 }

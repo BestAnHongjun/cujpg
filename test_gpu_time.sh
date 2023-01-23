@@ -1,0 +1,1 @@
+sudo /usr/local/cuda/bin/nvprof ./bin/demo

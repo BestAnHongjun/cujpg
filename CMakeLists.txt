@@ -17,7 +17,6 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${PROJECT_SOURCE_DIR}/bin)
 include_directories(${PROJECT_SOURCE_DIR})
 include_directories(${PROJECT_SOURCE_DIR}/include)
 
-
 # Set 3rdParty packages
 find_package(OpenCV)
 include_directories(${OpenCV_INCLUDE_DIRS})
@@ -30,19 +29,15 @@ link_directories(/usr/lib/arrch64-linux-gnu)
 add_subdirectory(cuda)
 set (EXTRA_LIBS ${EXTRA_LIBS} cujpg_cuda)
 
-
-# add_executable(demo demo.cpp source/cujpg.cpp)
-# target_link_libraries(demo ${EXTRA_LIBS})
-# target_link_libraries(demo ${OpenCV_LIBS})
-# target_link_libraries(demo nppc nppial nppicc nppicom nppidei nppif nppig nppim nppist nppisu nppitc npps)
-
-add_executable(demo
-    demo.cpp 
+add_library(cujpg
     source/cujpg_baseinfo.cpp 
-    source/cujpg_mainbody.cpp
+    source/cujpg_mainbody.cpp 
     source/cujpg_utils.cpp
 )
 
-target_link_libraries(demo ${EXTRA_LIBS})
-target_link_libraries(demo ${OpenCV_LIBS})
-target_link_libraries(demo nppc nppial nppicc nppicom nppidei nppif nppig nppim nppist nppisu nppitc npps)
+target_link_libraries(cujpg ${EXTRA_LIBS})
+target_link_libraries(cujpg ${OpenCV_LIBS})
+target_link_libraries(cujpg nppc nppial nppicc nppicom nppidei nppif nppig nppim nppist nppisu nppitc npps)
+
+add_executable(demo demo.cpp)
+target_link_libraries(demo cujpg)
